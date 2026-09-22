@@ -87,5 +87,5 @@ Makefile                一次 make 编全部，无需 wayland-scanner（协议�
 
 ## License
 
-GPL-3.0-only. 背景说明：本项目的容器环境受益于 [Droid Spaces](https://www.droidspace.dev) 类方案，
+GPL-3.0-only. 背景说明：本项目的容器环境受益于 [Droid Spaces](https://github.com/ravindu644/Droidspaces-OSS) 类方案，
 但其"防接管"设计（剪掉 card 节点）恰好是本项目绕开的对象——致敬，非隶属。
