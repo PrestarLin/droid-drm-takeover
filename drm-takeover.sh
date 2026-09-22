@@ -4,7 +4,8 @@
 # 输出全部在 ../logs/drm-takeover.log
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DIR=$ROOT
-LOGD=$ROOT/logs
+LOGD=${LOG_DIR:-$(dirname "$ROOT")/logs}
+mkdir -p "$LOGD"
 LOG=$LOGD/drm-takeover.log
 exec >>"$LOG" 2>&1
 set -x

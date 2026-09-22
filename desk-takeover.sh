@@ -4,7 +4,8 @@
 # 任一关键步失败 → 自动回滚（恢复安卓全家，含 system_suspend 显式拉起，防 Scout 重启）。
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DIR=$ROOT
-LOGD=$ROOT/logs
+LOGD=${LOG_DIR:-$(dirname "$ROOT")/logs}
+mkdir -p "$LOGD"
 exec >>"$LOGD/desk-takeover.log" 2>&1
 set -x
 echo "=== DESK-TAKEOVER START $(date +%F_%T) ==="

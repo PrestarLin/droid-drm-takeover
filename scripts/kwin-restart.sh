@@ -3,7 +3,8 @@
 # 以 root 运行。
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 DIR=$ROOT
-LOGD=$ROOT/logs
+LOGD=${LOG_DIR:-$(dirname "$ROOT")/logs}
+mkdir -p "$LOGD"
 pkill -9 -f "kwinwrap --out" 2>/dev/null
 pkill -9 -f "socket=taketest" 2>/dev/null
 sleep 1

@@ -4,7 +4,7 @@
 # 用法: DEV=<adb端点> nohup bash dmesg-harvester.sh >/dev/null 2>&1 &
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 DIR=$ROOT
-LOGD=$ROOT/logs/harvest
+LOGD=${LOG_DIR:-$(dirname "$ROOT")/logs}/harvest
 mkdir -p "$LOGD"
 while [ -f $DIR/takeover.ok ]; do
     ts=$(date +%m%d-%H%M%S)

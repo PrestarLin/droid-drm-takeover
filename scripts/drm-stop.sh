@@ -3,7 +3,8 @@
 # 以 root 运行（容器）。
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 DIR=$ROOT
-LOGD=$ROOT/logs
+LOGD=${LOG_DIR:-$(dirname "$ROOT")/logs}
+mkdir -p "$LOGD"
 exec >>"$LOGD/drm-takeover.log" 2>&1
 set -x
 DEV=$(adb devices | awk '$2=="device"{print $1; exit}')

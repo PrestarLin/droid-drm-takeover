@@ -6,7 +6,8 @@
 # 拉起安卓后轮询 init.svc，不达标就补刀再 start。
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 DIR=$ROOT
-LOGD=$ROOT/logs
+LOGD=${LOG_DIR:-$(dirname "$ROOT")/logs}
+mkdir -p "$LOGD"
 LOG=$LOGD/desk-stop.log
 
 # ---- 自脱钩：第一段在 konsole 里，只负责把真身甩出去并转发日志 ----

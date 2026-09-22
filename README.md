@@ -75,9 +75,10 @@ drm-takeover.sh         单轮/常驻接管（无桌面或仅 kwin），带自�
 scripts/                desk-stop / drm-stop / kwin-restart / keepbright / dmesg-harvester
 src/                    kwinwrap(核心) + 一批 atomic/drm/udev 探针 + touchdraw/touchtest/touchinj
 configs/                desk-wifi.conf.example
-docs/                   完整工程复盘（对象 ID、事故记录、恢复手册）
 Makefile                一次 make 编全部，无需 wayland-scanner（协议桩已随仓库生成）
 ```
+
+运行日志默认写到仓库**同级**的 `logs/` 目录（可用 `LOG_DIR=...` 覆盖），与真实 WiFi 配置一样不进版本库。
 
 ## 风险提示
 
