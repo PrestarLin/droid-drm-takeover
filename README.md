@@ -9,7 +9,7 @@
 ## 它解决什么问题
 
 在安卓上跑 Linux 图形（Termux/容器方案）通常只有一条路：把帧**转发**回安卓 SurfaceFlinger 合成上屏
-（Anland、DroidSpaces 都是这个架构，DroidSpaces 甚至刻意剪掉了 card 节点来防止绕过）。
+（Anland、Droidspaces 都是这个架构，Droidspaces 甚至刻意剪掉了 card 节点来防止绕过）。
 本项目证明了另一条路：**Linux 侧合成器直接从 KMS 手里抢到面板的所有权**，安卓整套图形栈原地退场，
 帧路径零拷贝零转发，延迟只取决于 KMS 提交本身。
 
@@ -87,5 +87,5 @@ Makefile                一次 make 编全部，无需 wayland-scanner（协议�
 
 ## License
 
-GPL-3.0-only. 背景说明：本项目的容器环境受益于 [Droid Spaces](https://github.com/ravindu644/Droidspaces-OSS) 类方案，
+GPL-3.0-only. 背景说明：本项目的容器环境受益于 [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) 类方案，
 但其"防接管"设计（剪掉 card 节点）恰好是本项目绕开的对象——致敬，非隶属。
