@@ -38,6 +38,7 @@ kill_desktop() {
     pkill -9 -f "startplasma-wayland"
     pkill -9 -f "dbus-run-session"
     pkill -9 -f "plasmashell"
+    pkill -9 -f "kactivitymanagerd"
     pkill -9 -f "plasma-keyboard"
     pkill -9 -f "xdg-desktop-portal"
     pkill -9 -f "dmesg-harvester.sh"

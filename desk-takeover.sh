@@ -41,6 +41,7 @@ kill_linux_stack() {
     pkill -9 -f "kwin_wayland --" 2>/dev/null
     pkill -9 -f "startplasma-wayland" 2>/dev/null
     pkill -9 -f "plasmashell" 2>/dev/null
+    pkill -9 -f "kactivitymanagerd" 2>/dev/null
     pkill -9 -f "plasma-keyboard" 2>/dev/null
     pkill -9 -f "dmesg-harvester.sh" 2>/dev/null
     pkill -f "$WIFI_CONF" 2>/dev/null
@@ -136,6 +137,23 @@ sleep 2
 $DIR/bin/crtcstate > $LOGD/crtcstate-desk2.log 2>&1
 
 # ---- 4) Plasma 桌面 ----
+# 09-23 黑屏根因：plasmashell 硬依赖 kactivitymanagerd，总线自动激活今天直接超时
+# （"Aborting shell load: The activity manager daemon is not running" → 无壳黑屏）。
+# 不再赌 dbus 激活：显式拉起并等名字出现。
+nohup runuser -u xieyizhou -- env -u DISPLAY \
+    HOME=/home/xieyizhou XDG_RUNTIME_DIR=/run/user/1000 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    /usr/lib/aarch64-linux-gnu/libexec/kactivitymanagerd > $LOGD/kactivitymanagerd.log 2>&1 &
+for i in $(seq 1 10); do
+    runuser -u xieyizhou -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+        gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+        --method org.freedesktop.DBus.ListNames 2>/dev/null | grep -q org.kde.ActivityManager && break
+    sleep 1
+done
+runuser -u xieyizhou -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+    --method org.freedesktop.DBus.ListNames 2>/dev/null | grep -q org.kde.ActivityManager \
+    || echo "WARN: kactivitymanagerd not on bus, plasmashell may abort (see kactivitymanagerd.log)"
 # /etc/environment 的 QT_IM_MODULE=fcitx5 会把 Qt 应用的 text-input 抢去 fcitx，
 # kwin 收不到聚焦事件 → plasma-keyboard 永远不弹（Chrome 自带协议所以能弹）。
 # 一律清掉，让 Qt 回退到 compositor 内置 text-input。
