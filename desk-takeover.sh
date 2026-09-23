@@ -219,6 +219,7 @@ if [ "$NET" != 1 ]; then
 else
     echo "NET-TAKEOVER OK $(date +%T)"
 fi
+fi
 else
     echo "NET-SKIPPED $(date +%T): 无可用 wifi 配置(安卓 SSID/PSK 没读到)，只起桌面"
 fi
