@@ -55,8 +55,13 @@
   `WifiConfigStore.xml`）自动生成 wpa 配置；dhcpcd 拿到租约后再动态探测网关/网段，注入安卓遗留的
   **table 1015**（安卓没有 `lookup main`，全部 fwmark 到 1015）。而且网络段是**纯尽力而为**：
   关联/出口失败只打警告，绝不再回滚连坐已上屏的桌面。
+- **plasmashell 硬依赖 kactivitymanagerd，别赌 dbus 自动激活**：接管会话里激活超时 → shell 直接
+  `Aborting shell load`，现象是"kwin 活着、触摸在收、面板有模式，但整屏纯黑"。必须显式拉起
+  kactivitymanagerd（记得给 `QT_QPA_PLATFORM=wayland`，否则 Qt 找不到平台插件又自杀）并等
+  `org.kde.ActivityManager` 上总线后再起 plasmashell。
 - 其余对象 ID 漂移（conn/crtc/plane 每次 boot 都变）、vendor vblank 时间戳为 0、`TEST` 返 -22 噪音等，
-  见 `docs/`。
+  见 docs；kwin.log 里 `Failed to open drm node: ""` 是节点发现噪音，**不代表软件渲染**
+  （实测 Mesa/Vulkan 完整，vkmark 1w+ 分）。
 
 ## 设备要求
 
