@@ -37,8 +37,14 @@
 
 - **彻底断网根因**：接管后 SF 停 ~120s，安卓 system_server watchdog 会杀 system_server，init 级联
   SIGKILL wpa_supplicant/netd/zygote → WiFi 掉线且 UI 不可用，只能强重启。对策：接管前解除
-  watchdog（`watchdog_timeout`/`nativehang`/`stay_on`）+ wake_lock 钉住；**回滚脚本必须与将被它杀掉的
-  GUI 栈脱钩**（setsid 后台 + pgrep 验证重试 + `fuser -k /dev/dri/card0` 兜底）。
+  watchdog（`watchdog_timeout`/`nativehang`/`stay_on`）+ wake_lock 钉住；**接管与回滚脚本都必须与
+  将被它们杀掉的 GUI 栈脱钩**（setsid 后台 + pgrep 验证重试 + `fuser -k /dev/dri/card0` 兜底；
+  我们被这事咬了两次：desk-stop 和 desk-takeover 从桌面终端启动时，杀掉 kwin 的瞬间终端连带
+  脚本一起死，安卓又已 stop → 两头全黑）。
+- **双桌面共享 HOME，全局环境改动必须两边回归**：DRM 桌面的虚拟键盘要求 Qt 直连合成器 text-input，
+  为此删了全局 `/etc/environment` 的 `QT_IM_MODULE=fcitx5`——结果 anland（帧转发方案）的安卓 IME
+  桥恰恰依赖 Qt 走 fcitx5 桥，中文选词后只剩前缀字母（Chrome 不受影响）。修复=在 anland launcher
+  里**会话级**注入 `QT_IM_MODULE=fcitx5`（并把 fcitx5 守护起在同一 dbus 总线），全局保持干净。
 - **触摸验证禁旁听**：对触摸节点跑 `getevent` 会触发小米安全联动直接断网（多次实锤）。触摸链路一律
   只让 kwin 一个读者，用 `bin/touchtest` 打点日志验证。
 - **虚拟键盘**：kwin 6.6 的 `zwp_input_method_v1` 只对 kwin 自己拉起的 IM 可见——配置

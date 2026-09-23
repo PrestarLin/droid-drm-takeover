@@ -6,6 +6,20 @@ ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DIR=$ROOT
 LOGD=${LOG_DIR:-$(dirname "$ROOT")/logs}
 mkdir -p "$LOGD"
+
+# ---- 自脱钩（09-23 黑屏事故教训，同 desk-stop v2）：快捷方式从桌面 konsole 进来时，
+#      konsole 是将被本脚本杀掉的 kwin 的客户端；kwin 一死 pty 关闭，前台脚本陪葬，
+#      而此时安卓已 stop → 两头全黑。主体必须 setsid 脱离终端。 ----
+if [ -z "$DESKSTART_ID" ]; then
+    DESKSTART_ID="$$.start"
+    export DESKSTART_ID
+    setsid nohup "$0" >>"$LOGD/desk-takeover.log" 2>&1 </dev/null &
+    CHILD=$!
+    tail -n 60 --pid=$CHILD -f "$LOGD/desk-takeover.log" 2>/dev/null
+    exit 0
+fi
+trap '' HUP INT TERM
+
 exec >>"$LOGD/desk-takeover.log" 2>&1
 set -x
 echo "=== DESK-TAKEOVER START $(date +%F_%T) ==="
