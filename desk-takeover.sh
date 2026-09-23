@@ -161,8 +161,15 @@ if [ "$OK" != 1 ]; then
     echo "--- wpa diagnosis ---"
     wpa_cli -p /run/wpa-takeover -i wlan0 status
     tail -n 25 /run/wpa-takeover.log
-    rollback "wifi assoc timeout (30s)"
+    if [ "${SKIP_WIFI:-0}" = 1 ]; then
+        # 没网也要保住桌面（人就在平板前用）；wpa 清干净，desk-stop 照常可回滚
+        pkill -f "$WIFI_CONF" 2>/dev/null
+        echo "NET-SKIPPED $(date +%T): desktop kept, no network (SKIP_WIFI=1)"
+    else
+        rollback "wifi assoc timeout (30s)"
+    fi
 fi
+if [ "$OK" = 1 ]; then
 echo "WIFI-ASSOC OK $(date +%T), now DHCP"
 # 安卓 netd 留的旧地址是 noprefixroute（main 表没直连路由，默认路由会被拒
 # "Nexthop has invalid gateway"）→ 先冲干净，让 dhcpcd 完整接管；
@@ -200,6 +207,7 @@ if [ "$NET" != 1 ]; then
     rollback "no egress after dhcp"
 fi
 echo "NET-TAKEOVER OK $(date +%T)"
+fi
 
 # ---- 6) 收尾：取证收割机 + 状态 ----
 DEV=$DEV nohup bash $DIR/scripts/dmesg-harvester.sh > /dev/null 2>&1 &
