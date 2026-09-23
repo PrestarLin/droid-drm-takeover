@@ -64,8 +64,21 @@ rollback() {
     exit 1
 }
 
-# ---- 0) 预检：凭据文件必须在，否则直接不玩 ----
-[ -f "$WIFI_CONF" ] || { echo "MISSING $WIFI_CONF"; exit 1; }
+# ---- 0) 预检+自动生成网络配置：从安卓现读当前连接的 SSID/PSK（换网零改动），
+#         /root/desk-wifi.conf 仅作兜底；都没有也放行——网络尽力而为，桌面优先 ----
+WIFI_GEN=/run/desk-wifi-dyn.conf
+CUR_SSID=$(adb -s "$DEV" shell "cmd wifi status" 2>/dev/null | sed -n 's/.*connected to "\(.*\)".*/\1/p' | tr -d '\r')
+CUR_PSK=$(adb -s "$DEV" shell "su -c 'grep -A2 \"&quot;$CUR_SSID&quot;<\" /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml'" 2>/dev/null | sed -n 's/.*<string name="PreSharedKey">&quot;\(.*\)&quot;<.*/\1/p' | tr -d '\r' | head -1)
+if [ -n "$CUR_SSID" ] && [ -n "$CUR_PSK" ]; then
+    printf 'ctrl_interface=/run/wpa-takeover\nupdate_config=0\nap_scan=1\npmf=1\nsae_pwe=2\n' > "$WIFI_GEN"
+    printf '%s' "$CUR_PSK" | wpa_passphrase "$CUR_SSID" >> "$WIFI_GEN"
+    WIFI_CONF=$WIFI_GEN
+    echo "WIFI-GEN OK for SSID[$CUR_SSID]"
+else
+    rm -f "$WIFI_GEN"   # 防上一轮遗留的过期配置被误用
+    [ -f "$WIFI_CONF" ] && echo "WIFI-GEN miss(ssid=[$CUR_SSID]), fallback to static conf" \
+        || echo "WIFI-GEN miss and no static conf: desktop will run WITHOUT network"
+fi
 
 # ---- 1) DRM 节点 + udev 合成记录（与 drm-takeover.sh 同源） ----
 mkdir -p /dev/dri /dev/input
@@ -146,7 +159,9 @@ $DIR/bin/setbright 2048 > /dev/null 2>&1
 echo "DESKTOP-UP $(date +%T) kwin pid $KPID"
 
 # ---- 5) 容器接管 WiFi（桌面已在屏上，网络是第二条腿） ----
-pkill -f "$WIFI_CONF" 2>/dev/null
+if [ -f "$WIFI_GEN" ] || [ -f "$WIFI_CONF" ]; then
+[ -f "$WIFI_GEN" ] && WIFI_CONF="$WIFI_GEN"
+pkill -f 'wpa_supplicant.*desk-wifi' 2>/dev/null
 pkill -x dhcpcd 2>/dev/null
 sleep 1
 ip link set wlan0 down; sleep 1; ip link set wlan0 up
@@ -161,13 +176,9 @@ if [ "$OK" != 1 ]; then
     echo "--- wpa diagnosis ---"
     wpa_cli -p /run/wpa-takeover -i wlan0 status
     tail -n 25 /run/wpa-takeover.log
-    if [ "${SKIP_WIFI:-0}" = 1 ]; then
-        # 没网也要保住桌面（人就在平板前用）；wpa 清干净，desk-stop 照常可回滚
-        pkill -f "$WIFI_CONF" 2>/dev/null
-        echo "NET-SKIPPED $(date +%T): desktop kept, no network (SKIP_WIFI=1)"
-    else
-        rollback "wifi assoc timeout (30s)"
-    fi
+    # 网络尽力而为：关联失败不连坐桌面（安卓已 stop，网络要等 desk-stop/回滚才恢复）
+    pkill -f 'wpa_supplicant.*desk-wifi' 2>/dev/null
+    echo "NET-FAILED $(date +%T): desktop kept, NO network (SSID/PSK 没对上？返回安卓再试)"
 fi
 if [ "$OK" = 1 ]; then
 echo "WIFI-ASSOC OK $(date +%T), now DHCP"
@@ -204,9 +215,12 @@ if [ "$NET" != 1 ]; then
     echo "--- egress diagnosis ---"
     ip route show table all | head -n 30
     cat /etc/resolv.conf
-    rollback "no egress after dhcp"
+    echo "NET-EGRESS-FAIL $(date +%T): desktop kept, egress broken (路由/表1015 问题?)"
+else
+    echo "NET-TAKEOVER OK $(date +%T)"
 fi
-echo "NET-TAKEOVER OK $(date +%T)"
+else
+    echo "NET-SKIPPED $(date +%T): 无可用 wifi 配置(安卓 SSID/PSK 没读到)，只起桌面"
 fi
 
 # ---- 6) 收尾：取证收割机 + 状态 ----
