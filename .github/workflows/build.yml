@@ -3,6 +3,7 @@ name: build
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   # 目标架构只有 aarch64（touchdraw 等含 ARM64 汇编，x86 原生全量构建没有意义）
