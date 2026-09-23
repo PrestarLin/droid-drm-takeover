@@ -82,8 +82,9 @@ jobs:
             patch -p1 -d common < "$p"
           done
           echo "=== all patches applied ==="
-      - name: Configure and build Image
+      - name: Configure kernel
         run: |
+          set -o pipefail
           cd kw/common
           echo 'CONFIG_LOCALVERSION="-droid-drm-dp"' >> arch/arm64/configs/gki_defconfig
           echo 'CONFIG_LOCALVERSION_AUTO=n' >> arch/arm64/configs/gki_defconfig
@@ -92,11 +93,29 @@ jobs:
           export AR=llvm-ar NM=llvm-nm AS=clang READELF=llvm-readelf
           export OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump OBJSIZE=llvm-size STRIP=llvm-strip
           export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+          make -j"$(nproc)" O=out gki_defconfig 2>&1 | tee /tmp/kcfg.log
+      - name: Build Image
+        run: |
+          set -o pipefail
+          cd kw/common
+          export PATH="$GITHUB_WORKSPACE/kw/clang19/bin:$GITHUB_WORKSPACE/kw/build-tools/bin:$PATH"
+          export CC=clang HOSTCC=clang LD=ld.lld HOSTLD=ld.lld
+          export AR=llvm-ar NM=llvm-nm AS=clang READELF=llvm-readelf
+          export OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump OBJSIZE=llvm-size STRIP=llvm-strip
+          export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
           export KCFLAGS="-no-canonical-prefixes -O2 -pipe -Wno-error -fno-stack-protector -D__ANDROID_COMMON_KERNEL__"
-          make -j"$(nproc)" O=out gki_defconfig
-          make -j"$(nproc)" O=out Image
+          make -j"$(nproc)" O=out Image 2>&1 | tee /tmp/kbuild.log
           file out/arch/arm64/boot/Image
           ls -la out/arch/arm64/boot/Image
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-logs
+          path: |
+            /tmp/kcfg.log
+            /tmp/kbuild.log
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: kernel-image
