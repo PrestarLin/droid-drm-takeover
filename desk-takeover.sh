@@ -140,7 +140,8 @@ $DIR/bin/crtcstate > $LOGD/crtcstate-desk2.log 2>&1
 # 09-23 黑屏根因：plasmashell 硬依赖 kactivitymanagerd，总线自动激活今天直接超时
 # （"Aborting shell load: The activity manager daemon is not running" → 无壳黑屏）。
 # 不再赌 dbus 激活：显式拉起并等名字出现。
-nohup runuser -u xieyizhou -- env -u DISPLAY \
+nohup runuser -u xieyizhou -- env -u DISPLAY -u QT_IM_MODULE -u GTK_IM_MODULE -u XMODIFIERS \
+    QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=taketest \
     HOME=/home/xieyizhou XDG_RUNTIME_DIR=/run/user/1000 \
     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
     /usr/lib/aarch64-linux-gnu/libexec/kactivitymanagerd > $LOGD/kactivitymanagerd.log 2>&1 &
