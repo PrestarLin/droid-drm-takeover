@@ -75,8 +75,19 @@ drm-takeover.sh         单轮/常驻接管（无桌面或仅 kwin），带自�
 scripts/                desk-stop / drm-stop / kwin-restart / keepbright / dmesg-harvester
 src/                    kwinwrap(核心) + 一批 atomic/drm/udev 探针 + touchdraw/touchtest/touchinj
 configs/                desk-wifi.conf.example
+docs/tools.md           全部编译产物的用法手册
 Makefile                一次 make 编全部，无需 wayland-scanner（协议桩已随仓库生成）
 ```
+
+## 工具速览
+
+`make` 产出 18 个二进制，**日常全自动、不需要手动跑任何一个**；按角色分三类：
+
+- **接管核心**（脚本内部调用）：`kwinwrap`（master 交接桥，心脏）、`setbright`/`setprop`（点亮屏幕）、`atomicspy`（录制每次 atomic 提交）。
+- **触摸验证**（替代被厂商安全策略禁止的 getevent 旁听）：`touchtest`（合成器链路画板）、`touchdraw`（裸 atomic 直绘）、`touchinj`（假触摸注入）、`udevprobe`/`udevmatch`（动态找触摸节点）。
+- **KMS 诊断探针**（新设备适配用）：`rawprobe`、`drmatomic`、`atombisect`、`connprops`、`planecrtc`、`informats`、`crtcstate`、`masterprobe`、`stageprobe`、`replicate`、`kwinprobe`。
+
+每个工具的用法与新设备适配最短路径 → [docs/tools.md](docs/tools.md)。
 
 运行日志默认写到仓库**同级**的 `logs/` 目录（可用 `LOG_DIR=...` 覆盖），与真实 WiFi 配置一样不进版本库。
 
