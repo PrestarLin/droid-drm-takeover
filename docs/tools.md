@@ -39,6 +39,21 @@
 | `masterprobe` | 探测当前谁持有 DRM master | 直跑 |
 | `kwinprobe` | 借 kwin 已握住的 card fd（`pid` 附加）在真实上下文内测行为 | `kwinprobe <pid>` |
 
+## ④ DP alt mode（外接屏会话，容器侧 root 工具，全部 -static）
+
+| 工具 | 作用 | 用法 |
+|---|---|---|
+| `dp-lease-helper` | 铸 DRM_MODE_LEASE_EXCL 独占租约（DP connector + 空闲 CRTC + planes），daemon 持有 lessee fd 并经 socket 发给 kwin | `dp-lease-helper daemon [--card /dev/dri/card0] [--connector ID] [--type N]` / `revoke` / `status` |
+| `kwin-drm-shim.so` | LD_PRELOAD 拦 `open("/dev/dri/card*")` → 换成租约 fd（拿不到 lease 透明回退真实 open） | `LD_PRELOAD=bin/kwin-drm-shim.so DP_LEASE_SOCK=... kwin_wayland --socket=dpdesk` |
+| `dp-screenctl` | SCREEN_OFF 策略：display = wake_lock + 背光 0 + 吞 KEY_POWER（音量经 uinput 转发）；lock = 仅 wake_lock；off = 恢复 | `dp-screenctl display\|lock\|off` |
+| `dp-touchpad` | 触摸屏 EVIOCGRAB + INPUT_PROP_DIRECT uinput 克隆（单点 MT，1:1 量程），内屏触摸同时镜像给容器 | `dp-touchpad on [--device PATH]` / `off`；`TP_NAME` 覆盖自动发现 |
+| `scripts/dp-touchpad.sh` | 上者的薄包装 | 同上 |
+| `scripts/desk-dp-takeover.sh` | DP 会话入口（helper→screenctl→touchpad→kwin→Plasma），**不停安卓** | `sudo bash scripts/desk-dp-takeover.sh`；`TOUCHPAD=` `SCREEN_OFF=` 环境开关 |
+| `scripts/desk-dp-stop.sh` | revoke → 杀 DP 桌面栈 → 杀 helper → 开关归位（**禁止 fuser card0**） | `sudo bash scripts/desk-dp-stop.sh` |
+
+内核前置：`kernel-patches/0001-0003`（未打补丁时 helper 铸租会按旧 DRM_MASTER 语义
+拒绝，`dp-lease-helper status` + `logs/dp-lease-helper.log` 可诊断）。
+
 ## 新设备适配最短路径
 
 1. `rawprobe` + `planecrtc` + `informats` → 摸清面板资源拓扑；

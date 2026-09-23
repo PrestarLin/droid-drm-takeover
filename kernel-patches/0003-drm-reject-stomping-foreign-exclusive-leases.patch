@@ -1,0 +1,46 @@
+drm: reject stomping foreign exclusive leases (-EBUSY)
+
+SETCRTC and DRM_IOCTL_MODE_ATOMIC against an object exclusively
+leased to another client fail with -EBUSY instead of EACCES/ENOENT.
+Plain lease checks still apply for non-exclusive leases.
+
+diff --git a/drivers/gpu/drm/drm_atomic_uapi.c b/drivers/gpu/drm/drm_atomic_uapi.c
+index fd36b8f..be9e005 100644
+--- a/drivers/gpu/drm/drm_atomic_uapi.c
++++ b/drivers/gpu/drm/drm_atomic_uapi.c
+@@ -41,6 +41,7 @@
+ #include <linux/file.h>
+ 
+ #include "drm_crtc_internal.h"
++#include "drm_internal.h"
+ 
+ /**
+  * DOC: overview
+@@ -1450,6 +1451,14 @@ int drm_mode_atomic_ioctl(struct drm_device *dev,
+ 			goto out;
+ 		}
+ 
++		if (drm_excl_obj_hidden_from(dev, obj_id, file_priv)) {
++			drm_dbg_atomic(dev, "[OBJECT:%d] exclusively leased to another client",
++				       obj_id);
++			drm_mode_object_put(obj);
++			ret = -EBUSY;
++			goto out;
++		}
++
+ 		if (!obj->properties) {
+ 			drm_dbg_atomic(dev, "[OBJECT:%d] has no properties", obj_id);
+ 			drm_mode_object_put(obj);
+diff --git a/drivers/gpu/drm/drm_crtc.c b/drivers/gpu/drm/drm_crtc.c
+index 3488ff0..a2fcc58 100644
+--- a/drivers/gpu/drm/drm_crtc.c
++++ b/drivers/gpu/drm/drm_crtc.c
+@@ -719,6 +719,8 @@ int drm_mode_setcrtc(struct drm_device *dev, void *data,
+ 		drm_dbg_kms(dev, "Unknown CRTC ID %d\n", crtc_req->crtc_id);
+ 		return -ENOENT;
+ 	}
++	if (drm_excl_obj_hidden_from(dev, crtc->base.id, file_priv))
++		return -EBUSY;
+ 	drm_dbg_kms(dev, "[CRTC:%d:%s]\n", crtc->base.id, crtc->name);
+ 
+ 	plane = crtc->primary;

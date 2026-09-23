@@ -28,7 +28,76 @@ jobs:
           export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           make -j"$(nproc)" CC=aarch64-linux-gnu-gcc
           file bin/kwinwrap bin/touchdraw bin/touchtest bin/atomicspy.so
+          file bin-static/dp-lease-helper bin-static/dp-screenctl bin-static/dp-touchpad bin/kwin-drm-shim.so
       - uses: actions/upload-artifact@v4
         with:
           name: tools-aarch64
-          path: bin/
+          path: |
+            bin/
+            bin-static/
+
+  # 内核 job：用用户内核源码仓库的编译配方（buildrepo/local/builder_6.12.23.sh 同源）
+  # 走精简路径 —— 只验证本仓库 kernel-patches/ 三个 DP alt-mode 补丁能否在
+  # cctv18 完整 6.12.23 android16 树上编出 Image，跳过 susfs/KSU/交互项。
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune -af || true
+          df -h /
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            bison flex clang binutils dwarves git lld pahole \
+            make gcc python3 python-is-python3 bc libssl-dev libelf-dev \
+            libdw-dev cpio xz-utils unzip curl perl zip
+      - name: Fetch kernel source and clang19 toolchain
+        run: |
+          mkdir -p kw && cd kw
+          # 源码 zip 与工具链 URL = builder_6.12.23.sh 同款
+          curl -fL --retry 3 -o common.zip \
+            https://github.com/cctv18/android_kernel_common_oneplus_sm8850/archive/refs/heads/oneplus/sm8850_v_16.0.0_oneplus_15.zip
+          unzip -q common.zip
+          mv android_kernel_common_oneplus_sm8850-oneplus-sm8850_v_16.0.0_oneplus_15 common
+          rm -f common.zip
+          mkdir -p clang19 build-tools
+          curl -fL --retry 3 -o clang.zip \
+            https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang19-r536225/clang-r536225.zip
+          unzip -q clang.zip -d clang19 && rm -f clang.zip
+          curl -fL --retry 3 -o build-tools.zip \
+            https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang19-r536225/build-tools.zip
+          unzip -q build-tools.zip && rm -f build-tools.zip
+          df -h /
+      - name: Apply DP alt-mode kernel patches
+        run: |
+          cd kw
+          for p in "$GITHUB_WORKSPACE"/kernel-patches/*.patch; do
+            echo "=== $p ==="
+            patch -p1 -d common < "$p"
+          done
+          echo "=== all patches applied ==="
+      - name: Configure and build Image
+        run: |
+          cd kw/common
+          echo 'CONFIG_LOCALVERSION="-droid-drm-dp"' >> arch/arm64/configs/gki_defconfig
+          echo 'CONFIG_LOCALVERSION_AUTO=n' >> arch/arm64/configs/gki_defconfig
+          export PATH="$GITHUB_WORKSPACE/kw/clang19/bin:$GITHUB_WORKSPACE/kw/build-tools/bin:$PATH"
+          export CC=clang HOSTCC=clang LD=ld.lld HOSTLD=ld.lld
+          export AR=llvm-ar NM=llvm-nm AS=clang READELF=llvm-readelf
+          export OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump OBJSIZE=llvm-size STRIP=llvm-strip
+          export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+          export KCFLAGS="-no-canonical-prefixes -O2 -pipe -Wno-error -fno-stack-protector -D__ANDROID_COMMON_KERNEL__"
+          make -j"$(nproc)" O=out gki_defconfig
+          make -j"$(nproc)" O=out Image
+          file out/arch/arm64/boot/Image
+          ls -la out/arch/arm64/boot/Image
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image
+          path: kw/common/out/arch/arm64/boot/Image

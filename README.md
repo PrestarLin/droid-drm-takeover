@@ -86,15 +86,46 @@ sudo bash scripts/desk-stop.sh   # 全自动还给安卓（可与桌面快捷方
 
 单轮短窗口验证用 `drm-takeover.sh`（接管 ~150s 自动恢复），常驻用 `PERSIST=1 MODE=kwin`。
 
+## DP Alt Mode（外接屏，安卓内屏不受影响）
+
+与上面“停安卓抢内屏”的路线不同：**不停安卓、不抢 master**，让容器桌面经
+Type-C DP Alt Mode 输出到外接显示器，内屏 SurfaceFlinger 照常工作。
+
+- 权限核心 = `kernel-patches/` 三个补丁：privileged `CREATE_LEASE` +
+  `DRM_MODE_LEASE_EXCL` 独占租约；SF 视角里被租走的 DP connector 恒
+  “未插入”（getconnector 早退 DISCONNECTED），CRTC/atomic 提交对租约对象
+  返回 EBUSY —— 两个合成器互不抢、互不可见。
+- 容器侧 `dp-lease-helper`（root，静态）铸租并通过 unix socket + SCM_RIGHTS
+  把 lessee fd 交给 `LD_PRELOAD=kwin-drm-shim.so` 的 kwin；shim 拦
+  `open("/dev/dri/card*")`，拿不到 lease 时透明回退真实 open。
+- 内核需打上 `kernel-patches/`（CI `kernel` job 用 cctv18 完整源码 + clang19
+  配方编 `Image`，可直接刷）。
+
+```
+make
+sudo bash scripts/desk-dp-takeover.sh      # 起 DP 会话（此时插线即可出画）
+sudo bash scripts/desk-dp-stop.sh          # revoke → 杀栈 → 开关归位
+```
+
+环境开关：`TOUCHPAD=on|off`（默认 off；on = 触摸屏 grab → uinput 克隆给容器）、
+`SCREEN_OFF=display|lock`（默认 display = wake_lock + 内屏背光 0 + 吞电源键，
+音量键转发；lock = 仅 wake_lock，锁屏走安卓原生）。两档都必须 wake_lock ——
+休眠会断 Type-C DP 链路。stop **绝不** `fuser -k card0`、不停安卓、不碰 WiFi。
+设计细节 → [docs/superpowers/specs/2026-09-23-dp-alt-mode-design.md](docs/superpowers/specs/2026-09-23-dp-alt-mode-design.md)。
+
 ## 目录结构
 
 ```
 desk-takeover.sh        全自动接管：显示+桌面+WiFi（推荐入口）
 drm-takeover.sh         单轮/常驻接管（无桌面或仅 kwin），带自动回滚
-scripts/                desk-stop / drm-stop / kwin-restart / keepbright / dmesg-harvester
-src/                    kwinwrap(核心) + 一批 atomic/drm/udev 探针 + touchdraw/touchtest/touchinj
+scripts/                desk-stop / drm-stop / kwin-restart / keepbright /
+                        dmesg-harvester / desk-dp-takeover / desk-dp-stop / dp-touchpad
+kernel-patches/         DP alt mode 内核补丁 0001-0003（独占租约+隐藏+防踩）
+src/                    kwinwrap(核心) + atomic/drm/udev 探针 + touchdraw/touchtest/touchinj
+                        + dp-lease-helper / dp-screenctl / dp-touchpad / kwin-drm-shim
 configs/                desk-wifi.conf.example
 docs/tools.md           全部编译产物的用法手册
+docs/superpowers/specs/ 设计文档（DP alt mode 等）
 Makefile                一次 make 编全部，无需 wayland-scanner（协议桩已随仓库生成）
 ```
 

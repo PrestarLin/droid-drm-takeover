@@ -1,0 +1,106 @@
+drm: hide objects exclusively leased to another client
+
+GETRESOURCES (crtc/encoder/connector), GETPLANERESOURCES: drop objects
+held by a foreign exclusive lease from the listing.
+GETCONNECTOR: force disconnected/empty state for a foreign exclusive
+connector so no other compositor binds it (DP alt mode).
+PAGE_FLIP: reject flips against a foreign exclusive crtc/plane (-EBUSY).
+
+diff --git a/drivers/gpu/drm/drm_connector.c b/drivers/gpu/drm/drm_connector.c
+index 994afa5..1069f9e 100644
+--- a/drivers/gpu/drm/drm_connector.c
++++ b/drivers/gpu/drm/drm_connector.c
+@@ -3171,6 +3171,23 @@ int drm_mode_getconnector(struct drm_device *dev, void *data,
+ 	if (!connector)
+ 		return -ENOENT;
+ 
++	/* Exclusively leased to another client: pretend nothing is plugged in
++	 * so no other compositor ever binds this connector (DP alt mode).
++	 */
++	if (drm_excl_obj_hidden_from(dev, connector->base.id, file_priv)) {
++		out_resp->connection = DRM_MODE_DISCONNECTED;
++		out_resp->connector_type = DRM_MODE_CONNECTOR_Unknown;
++		out_resp->connector_type_id = 0;
++		out_resp->count_modes = 0;
++		out_resp->count_encoders = 0;
++		out_resp->encoder_id = 0;
++		out_resp->count_props = 0;
++		out_resp->mm_width = 0;
++		out_resp->mm_height = 0;
++		ret = 0;
++		goto out;
++	}
++
+ 	encoders_count = hweight32(connector->possible_encoders);
+ 
+ 	if ((out_resp->count_encoders >= encoders_count) && encoders_count) {
+diff --git a/drivers/gpu/drm/drm_mode_config.c b/drivers/gpu/drm/drm_mode_config.c
+index 37d2e0a..5f625a4 100644
+--- a/drivers/gpu/drm/drm_mode_config.c
++++ b/drivers/gpu/drm/drm_mode_config.c
+@@ -128,7 +128,8 @@ int drm_mode_getresources(struct drm_device *dev, void *data,
+ 	count = 0;
+ 	crtc_id = u64_to_user_ptr(card_res->crtc_id_ptr);
+ 	drm_for_each_crtc(crtc, dev) {
+-		if (drm_lease_held(file_priv, crtc->base.id)) {
++		if (drm_lease_held(file_priv, crtc->base.id) &&
++		    !drm_excl_obj_hidden_from(dev, crtc->base.id, file_priv)) {
+ 			if (count < card_res->count_crtcs &&
+ 			    put_user(crtc->base.id, crtc_id + count))
+ 				return -EFAULT;
+@@ -140,6 +141,8 @@ int drm_mode_getresources(struct drm_device *dev, void *data,
+ 	count = 0;
+ 	encoder_id = u64_to_user_ptr(card_res->encoder_id_ptr);
+ 	drm_for_each_encoder(encoder, dev) {
++		if (drm_excl_obj_hidden_from(dev, encoder->base.id, file_priv))
++			continue;
+ 		if (count < card_res->count_encoders &&
+ 		    put_user(encoder->base.id, encoder_id + count))
+ 			return -EFAULT;
+@@ -156,7 +159,8 @@ int drm_mode_getresources(struct drm_device *dev, void *data,
+ 		    (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK))
+ 			continue;
+ 
+-		if (drm_lease_held(file_priv, connector->base.id)) {
++		if (drm_lease_held(file_priv, connector->base.id) &&
++		    !drm_excl_obj_hidden_from(dev, connector->base.id, file_priv)) {
+ 			if (count < card_res->count_connectors &&
+ 			    put_user(connector->base.id, connector_id + count)) {
+ 				drm_connector_list_iter_end(&conn_iter);
+diff --git a/drivers/gpu/drm/drm_plane.c b/drivers/gpu/drm/drm_plane.c
+index a28b22f..4a13609 100644
+--- a/drivers/gpu/drm/drm_plane.c
++++ b/drivers/gpu/drm/drm_plane.c
+@@ -34,6 +34,7 @@
+ #include <drm/drm_vblank.h>
+ 
+ #include "drm_crtc_internal.h"
++#include "drm_internal.h"
+ 
+ /**
+  * DOC: overview
+@@ -811,7 +812,8 @@ int drm_mode_getplane_res(struct drm_device *dev, void *data,
+ 		    !file_priv->supports_virtualized_cursor_plane)
+ 			continue;
+ 
+-		if (drm_lease_held(file_priv, plane->base.id)) {
++		if (drm_lease_held(file_priv, plane->base.id) &&
++		    !drm_excl_obj_hidden_from(dev, plane->base.id, file_priv)) {
+ 			if (count < plane_resp->count_planes &&
+ 			    put_user(plane->base.id, plane_ptr + count))
+ 				return -EFAULT;
+@@ -1385,8 +1387,14 @@ int drm_mode_page_flip_ioctl(struct drm_device *dev,
+ 	if (!crtc)
+ 		return -ENOENT;
+ 
++	if (drm_excl_obj_hidden_from(dev, crtc->base.id, file_priv))
++		return -EBUSY;
++
+ 	plane = crtc->primary;
+ 
++	if (drm_excl_obj_hidden_from(dev, plane->base.id, file_priv))
++		return -EBUSY;
++
+ 	if (!drm_lease_held(file_priv, plane->base.id))
+ 		return -EACCES;
+ 
