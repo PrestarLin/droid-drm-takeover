@@ -51,8 +51,10 @@
   `setInputMethodCommand` 让 kwin 自动 exec plasma-keyboard；`/etc/environment` 里的
   `QT_IM_MODULE=fcitx5` 会把 Qt 的 text-input 抢走导致键盘永不弹出，必须清掉。
 - **任务栏打不开应用**：`xdg-desktop-portal` 必须带 `XDG_CURRENT_DESKTOP=KDE` 起来才有 KDE 后端。
-- **换网自适应**：dhcpcd 拿到租约后动态探测网关/网段，注入安卓遗留的 **table 1015**
-  （安卓没有 `lookup main`，全部 fwmark 到 1015）——换 WiFi 不用改任何脚本。
+- **换网零配置**：接管前先从安卓动态读取当前连接的 SSID/PSK（`cmd wifi status` +
+  `WifiConfigStore.xml`）自动生成 wpa 配置；dhcpcd 拿到租约后再动态探测网关/网段，注入安卓遗留的
+  **table 1015**（安卓没有 `lookup main`，全部 fwmark 到 1015）。而且网络段是**纯尽力而为**：
+  关联/出口失败只打警告，绝不再回滚连坐已上屏的桌面。
 - 其余对象 ID 漂移（conn/crtc/plane 每次 boot 都变）、vendor vblank 时间戳为 0、`TEST` 返 -22 噪音等，
   见 `docs/`。
 
