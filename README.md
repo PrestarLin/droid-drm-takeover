@@ -89,28 +89,84 @@ sudo bash scripts/desk-stop.sh   # 全自动还给安卓（可与桌面快捷方
 ## DP Alt Mode（外接屏，安卓内屏不受影响）
 
 与上面“停安卓抢内屏”的路线不同：**不停安卓、不抢 master**，让容器桌面经
-Type-C DP Alt Mode 输出到外接显示器，内屏 SurfaceFlinger 照常工作。
+Type-C DP Alt Mode 输出到外接显示器，内屏 SurfaceFlinger 照常工作（可继续刷安卓）。
 
-- 权限核心 = `kernel-patches/` 三个补丁：privileged `CREATE_LEASE` +
+### 原理一句话
+
+- 内核打上 `kernel-patches/` 三个补丁：privileged `CREATE_LEASE` +
   `DRM_MODE_LEASE_EXCL` 独占租约；SF 视角里被租走的 DP connector 恒
   “未插入”（getconnector 早退 DISCONNECTED），CRTC/atomic 提交对租约对象
   返回 EBUSY —— 两个合成器互不抢、互不可见。
-- 容器侧 `dp-lease-helper`（root，静态）铸租并通过 unix socket + SCM_RIGHTS
+- 容器侧 `dp-lease-helper`（root，静态）铸租，经 unix socket + SCM_RIGHTS
   把 lessee fd 交给 `LD_PRELOAD=kwin-drm-shim.so` 的 kwin；shim 拦
   `open("/dev/dri/card*")`，拿不到 lease 时透明回退真实 open。
-- 内核需打上 `kernel-patches/`（CI `kernel` job 用 cctv18 完整源码 + clang19
-  配方编 `Image`，可直接刷）。
 
-```
-make
-sudo bash scripts/desk-dp-takeover.sh      # 起 DP 会话（此时插线即可出画）
-sudo bash scripts/desk-dp-stop.sh          # revoke → 杀栈 → 开关归位
+### 前提条件（一次性）
+
+1. **内核**：刷入带补丁的 `Image`。
+   - CI 绿后从 Actions 下载 artifact `kernel-image`
+     （[runs 分支 dev](https://github.com/PrestarLin/droid-drm-takeover/actions?query=branch%3Adev)），
+     用 KSU/boot img 打包工具合入当前 boot 分区，重启后 `uname -r` 应带 `-droid-drm-dp` 后缀。
+   - 或本地编：`patch -p1` 打 `kernel-patches/*.patch` 到完整 6.12.23 源码，`gki_defconfig` +
+     `make Image`（配方见 `.github/workflows/build.yml` kernel job）。
+2. **容器**：Ubuntu aarch64，装 KWin 6.6 + Plasma 6.x、`libdrm/libwayland` 开发包
+   （与主桌面同一容器即可，无需新环境）。
+3. **硬件**：Type-C 转 DP 线 + 外接屏（DP 或 HDMI+转接）。
+4. **编译**：仓库根 `make` —— 产出 `bin-static/`（helper/screenctl/touchpad，静态可直接
+   拷进任意容器）与 `bin/kwin-drm-shim.so`。
+
+### 日常使用
+
+```bash
+# 1) 插上 Type-C DP 线（与起会话的先后顺序无硬性要求）
+
+# 2) 起 DP 会话（容器内，root）
+sudo bash scripts/desk-dp-takeover.sh
+
+# 3) 用完，交还系统
+sudo bash scripts/desk-dp-stop.sh
 ```
 
-环境开关：`TOUCHPAD=on|off`（默认 off；on = 触摸屏 grab → uinput 克隆给容器）、
-`SCREEN_OFF=display|lock`（默认 display = wake_lock + 内屏背光 0 + 吞电源键，
-音量键转发；lock = 仅 wake_lock，锁屏走安卓原生）。两档都必须 wake_lock ——
-休眠会断 Type-C DP 链路。stop **绝不** `fuser -k card0`、不停安卓、不碰 WiFi。
+启动顺序（脚本全自动）：`dp-lease-helper daemon` 铸租 → `dp-screenctl` 执行
+熄屏策略 → 可选 `dp-touchpad on` → `LD_PRELOAD=kwin-drm-shim.so kwin_wayland
+--socket=dpdesk` → Plasma 栈。停止顺序相反，先 `revoke` 租约再杀栈，最后
+把开关归位。
+
+**环境开关**（起会话前 export，或直接前缀）：
+
+| 开关 | 取值 | 默认 | 作用 |
+|---|---|---|---|
+| `TOUCHPAD` | `on` / `off` | `off` | `on` = EVIOCGRAB 内屏触摸 → uinput 克隆进容器（单点 MT，1:1 量程），安卓侧触摸暂时失灵 |
+| `SCREEN_OFF` | `display` / `lock` | `display` | `display` = wake_lock + 内屏背光 0 + 吞电源键（音量键照常转发），看起来像“关屏”；`lock` = 仅 wake_lock，锁屏走安卓原生 UI |
+| `DP_LEASE_SOCK` | 路径 | `/data/local/tmp/drm-lease.sock`（脚本默认） | helper↔shim 通信 socket 路径；不设时 helper 按 `/data/local/tmp`→`/run`→`/tmp` 首个可写目录自选 |
+
+例：熄屏 + 触摸镜像进容器：
+
+```bash
+TOUCHPAD=on SCREEN_OFF=display sudo -E bash scripts/desk-dp-takeover.sh
+```
+
+**状态与诊断**：
+
+```bash
+sudo bin-static/dp-lease-helper status    # 租约是否在、对象 ID
+tail -f logs/dp-lease-helper.log           # helper 日志（DP 脚本写仓库内 logs/，已 gitignore）
+tail -f logs/desk-dp-takeover.log          # 会话主日志（启动过程 + 各步 pid）
+ls /data/local/tmp/dp-lease.pid /run/dp-touchpad.pid /run/dp-screenctl.state  # 开关是否还挂着
+```
+
+### 注意事项（会咬人的）
+
+- **两档 `SCREEN_OFF` 都持 `/sys/power/wake_lock`（token `dp_takeover`）**——
+  休眠会断 Type-C DP 链路外接屏直接黑；stop 会释放，别手动杀 pid。
+- **stop 绝不 `fuser -k card0`、不停安卓、不碰 WiFi**（与主桌面接管路线不同，
+  这是 DP 会话的硬规则，脚本已内置）。
+- 内核未刷补丁时会话照常起，但拿不到 `DRM_MODE_LEASE_EXCL`，外接屏不出画
+  （kwin 透明回退拿普通 fd，与 SF 抢 DP 会失败）→ 先确认 `uname -r` 后缀。
+- 一个 DP 会话同时只能有一个（helper 用 `dp-lease.pid` + flock 互斥）。
+- 触摸克隆期间**不要**对触摸节点跑 `getevent`（小米安全联动会断网，老坑）。
+
+更多工具级用法 → [docs/tools.md](docs/tools.md) ④ 节；
 设计细节 → [docs/superpowers/specs/2026-09-23-dp-alt-mode-design.md](docs/superpowers/specs/2026-09-23-dp-alt-mode-design.md)。
 
 ## 目录结构
