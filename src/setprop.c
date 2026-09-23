@@ -1,8 +1,11 @@
 /* setprop.c — generic connector property writer (for dpms etc).
- * usage: setprop <value> [prop-name=dpms] [connector-id=67] */
+ * usage: setprop <value> [prop-name=dpms] [connector-id]
+ * No connector arg (or 0): auto-pick the connected connector (runtime —
+ * conn67 was a piano boot ID; canoe IDs drift every boot/restart). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -10,26 +13,36 @@
 #include <xf86drmMode.h>
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: setprop <value> [prop=dpms] [conn=67]\n"); return 1; }
+    if (argc < 2) { fprintf(stderr, "usage: setprop <value> [prop=dpms] [conn]\n"); return 1; }
     uint64_t val = strtoull(argv[1], NULL, 0);
-    const char *name = argc > 2 ? argv[2] : "dpms";
-    uint32_t conn = argc > 3 ? strtoul(argv[3], NULL, 0) : 67;
+    const char *name = argc > 2 ? argv[2] : "DPMS";
+    uint32_t conn = argc > 3 ? strtoul(argv[3], NULL, 0) : 0;
 
     int fd = open("/dev/dri/card0", O_RDWR);
     if (fd < 0) { perror("open"); return 1; }
     drmModeRes *res = drmModeGetResources(fd);
     if (!res) { perror("GetResources"); return 2; }
     drmModeConnector *c = NULL;
-    for (int i = 0; i < res->count_connectors; i++)
-        if (res->connectors[i] == conn) { c = drmModeGetConnector(fd, conn); break; }
+    if (conn) {
+        for (int i = 0; i < res->count_connectors; i++)
+            if (res->connectors[i] == conn) { c = drmModeGetConnector(fd, conn); break; }
+    } else {
+        for (int i = 0; i < res->count_connectors; i++) {
+            drmModeConnector *t = drmModeGetConnector(fd, res->connectors[i]);
+            if (!t) continue;
+            if (t->connection == DRM_MODE_CONNECTED && t->count_modes) { c = t; break; }
+            drmModeFreeConnector(t);
+        }
+    }
     if (!c) { printf("connector %u not found\n", conn); return 3; }
+    conn = c->connector_id;
 
     uint32_t prop_id = 0;
     int idx = -1;
     for (int i = 0; i < c->count_props; i++) {
         drmModePropertyPtr p = drmModeGetProperty(fd, c->props[i]);
         if (!p) continue;
-        if (!strcmp(p->name, name)) {
+        if (!strcasecmp(p->name, name)) {
             prop_id = p->prop_id;
             idx = i;
             drmModeFreeProperty(p);

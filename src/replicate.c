@@ -1,6 +1,10 @@
 /* Faithful replica of kwinwrap's rebuilt 4-obj commit (the steady TEST that
  * returns -ENOENT during takeover), TEST_ONLY only, with shape variants to
- * find which missing/extra object turns -2 into 0. */
+ * find which missing/extra object turns -2 into 0. Runtime-discovered:
+ * conn/mode/crtc/planes were piano boot IDs (67/206/161/157) — canoe IDs
+ * drift every boot and the panel is 1272x2772 (halves = width/2).
+ * usage: replicate [connector-id]
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,12 +14,9 @@
 #include <xf86drmMode.h>
 #include <drm_fourcc.h>
 
-#define CRTC_ID 206u
-#define CONN_ID 67u
-#define PL_L    161u
-#define PL_R    157u
-#define W       1600u
-#define H       2136u
+static uint32_t CRTC_ID, CONN_ID, PL_L, PL_R, N_OTHERS;
+static uint32_t OTHERS[8];
+static uint32_t W, H;   /* half-panel: W*2 == mode.hdisplay */
 #define P_SX 9u
 #define P_SY 10u
 #define P_SW 11u
@@ -61,11 +62,10 @@ static int base(drmModeAtomicReq *r) {
 static void run(const char *tag, int variant) {
     drmModeAtomicReq *r = drmModeAtomicAlloc();
     base(r);
-    static const uint32_t others[] = {271,280,289,298,307,316,325};
     if (variant == 2)
-        for (unsigned i = 0; i < 7; i++) {
-            drmModeAtomicAddProperty(r, others[i], P_MODE, 0);
-            drmModeAtomicAddProperty(r, others[i], P_ACT, 0);
+        for (unsigned i = 0; i < N_OTHERS; i++) {
+            drmModeAtomicAddProperty(r, OTHERS[i], P_MODE, 0);
+            drmModeAtomicAddProperty(r, OTHERS[i], P_ACT, 0);
         }
     if (variant == 3)
         drmModeAtomicAddProperty(r, CONN_ID, P_MODE, blob);
@@ -101,7 +101,7 @@ static void run(const char *tag, int variant) {
     if (r) drmModeAtomicFree(r);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     fd = open("/dev/dri/card0", O_RDWR);
     if (fd < 0) { perror("open"); return 1; }
     if (drmSetMaster(fd)) printf("SetMaster: %s (continuing)\n", strerror(errno));
@@ -109,11 +109,59 @@ int main(void) {
 
     drmModeRes *res = drmModeGetResources(fd);
     if (!res) { printf("no res %s\n", strerror(errno)); return 2; }
-    drmModeConnector *c = drmModeGetConnector(fd, CONN_ID);
+    drmModeConnector *c = NULL;
+    uint32_t want = argc > 1 ? (uint32_t)strtoul(argv[1], NULL, 0) : 0;
+    for (int i = 0; i < res->count_connectors; i++) {
+        drmModeConnector *t = drmModeGetConnector(fd, res->connectors[i]);
+        if (!t) continue;
+        if (want ? t->connector_id == want
+                 : (t->connection == DRM_MODE_CONNECTED && t->count_modes)) {
+            c = t;
+            break;
+        }
+        drmModeFreeConnector(t);
+    }
     if (!c || !c->count_modes) { printf("conn bad\n"); return 3; }
+    CONN_ID = c->connector_id;
+    W = c->modes[0].hdisplay / 2;
+    H = c->modes[0].vdisplay;
     if (drmModeCreatePropertyBlob(fd, &c->modes[0], sizeof(c->modes[0]), &blob)) {
         printf("blob %s\n", strerror(errno)); return 4;
     }
+    /* crtc: bound encoder's, else first slot */
+    int crtc_idx = 0;
+    if (c->encoder_id) {
+        drmModeEncoder *e = drmModeGetEncoder(fd, c->encoder_id);
+        if (e && e->crtc_id) {
+            CRTC_ID = e->crtc_id;
+            for (int i = 0; i < res->count_crtcs; i++)
+                if (res->crtcs[i] == CRTC_ID) crtc_idx = i;
+            drmModeFreeEncoder(e);
+        }
+    }
+    if (!CRTC_ID) {
+        CRTC_ID = res->crtcs[0];
+        crtc_idx = 0;
+    }
+    for (int i = 0; i < res->count_crtcs && N_OTHERS < 8; i++)
+        if (res->crtcs[i] != CRTC_ID) OTHERS[N_OTHERS++] = res->crtcs[i];
+    /* first two planes that can scan out on this crtc */
+    drmModePlaneRes *pr = drmModeGetPlaneResources(fd);
+    int got = 0;
+    if (pr) {
+        for (uint32_t i = 0; i < pr->count_planes && got < 2; i++) {
+            drmModePlane *pl = drmModeGetPlane(fd, pr->planes[i]);
+            if (!pl) continue;
+            if (pl->possible_crtcs & (1u << crtc_idx)) {
+                if (got == 0) PL_L = pl->plane_id;
+                else PL_R = pl->plane_id;
+                got++;
+            }
+            drmModeFreePlane(pl);
+        }
+        drmModeFreePlaneResources(pr);
+    }
+    if (got < 2) PL_R = PL_L;
     struct drm_mode_create_dumb cd = {0};
     cd.width = 2 * W; cd.height = H; cd.bpp = 32;
     if (drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cd)) { printf("dumb %s\n", strerror(errno)); return 5; }
@@ -121,7 +169,9 @@ int main(void) {
     if (drmModeAddFB2(fd, 2 * W, H, DRM_FORMAT_XRGB8888, h4, p4, o4, &fb, 0)) {
         printf("addfb %s\n", strerror(errno)); return 6;
     }
-    printf("blob=%u fb=%u mode %dx%d\n", blob, fb, c->modes[0].hdisplay, c->modes[0].vdisplay);
+    printf("conn=%u crtc=%u planes=%u/%u others=%u blob=%u fb=%u mode %ux%u (half %ux%u)\n",
+           CONN_ID, CRTC_ID, PL_L, PL_R, N_OTHERS, blob, fb,
+           c->modes[0].hdisplay, c->modes[0].vdisplay, W, H);
     drmModeFreeConnector(c);
     drmModeFreeResources(res);
 

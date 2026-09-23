@@ -18,6 +18,8 @@
 #include <drm.h>
 #include <xf86drmMode.h>
 #include <drm_fourcc.h>
+#include <linux/input.h>
+#include <sys/ioctl.h>
 
 /* The kernel gates every atomic ioctl on file_priv->atomic: without
  * DRM_CLIENT_CAP_ATOMIC set on our fd, any property in the request returns a
@@ -301,15 +303,42 @@ int main(int argc, char **argv) {
     printf("COMMIT ret=%d (%s)\n", ret, ret ? strerror(errno) : "ok");
     if (ret) return 18;
 
-    /* ---- input takeover: NVT kernel-direct device @ /dev/input/event11 ----
-     * event9 ("Xiaomi Touch") is a uhid mirror fed by the Android stack, so
-     * it goes silent once surfaceflinger stops. event11 comes straight from
-     * the NVT-ts driver: coords are 0.01 mm and the axes are transposed vs
-     * the landscape panel (ABS_X 0..213599 -> panel height, ABS_Y 0..319999
-     * -> panel width); dividing by 100 gives panel pixels. */
-    int ifd = open("/dev/input/event11", O_RDONLY);
-    if (ifd < 0) { printf("open event11: %s\n", strerror(errno)); sleep(secs); return 0; }
-    printf("touchdraw on event11, %d s, touch the screen\n", secs);
+    /* ---- input takeover: scan for the kernel-direct touchscreen node ----
+     * piano: NVT driver @ event11 (event9 "Xiaomi Touch" is a uhid mirror
+     * that dies with surfaceflinger). canoe/OnePlus 15: node named
+     * "touchpanel" (event7 this boot, renumbered every boot) with MT ranges
+     * 0..20351 / 0..44351 == 16x panel pixels; map via EVIOCGABS so no
+     * per-device constants. Axes are NOT transposed on canoe. */
+    int ifd = -1;
+    char evname[64] = "";
+    if (getenv("TOUCH_DEV") && (ifd = open(getenv("TOUCH_DEV"), O_RDONLY)) >= 0)
+        snprintf(evname, sizeof evname, "%s", getenv("TOUCH_DEV"));
+    for (int n = 0; ifd < 0 && n < 32; n++) {
+        char path[64];
+        snprintf(path, sizeof path, "/dev/input/event%d", n);
+        int f = open(path, O_RDONLY);
+        if (f < 0) continue;
+        char nm[64] = "";
+        if (ioctl(f, EVIOCGNAME(sizeof nm), nm) >= 0 &&
+            (strcmp(nm, "touchpanel") == 0 || strcmp(nm, "NVTtouch") == 0 ||
+             strstr(nm, "NVT") || strstr(nm, "touch"))) {
+            ifd = f;
+            snprintf(evname, sizeof evname, "%s (%s)", path, nm);
+            break;
+        }
+        close(f);
+    }
+    if (ifd < 0 && (ifd = open("/dev/input/event11", O_RDONLY)) >= 0)
+        snprintf(evname, sizeof evname, "/dev/input/event11 (fallback)");
+    if (ifd < 0) { printf("no touchscreen node: %s\n", strerror(errno)); sleep(secs); return 0; }
+    long ax_max = 0, ay_max = 0;
+    struct input_absinfo ai;
+    if (ioctl(ifd, EVIOCGABS(ABS_MT_POSITION_X), &ai) == 0) ax_max = ai.maximum;
+    if (ioctl(ifd, EVIOCGABS(ABS_MT_POSITION_Y), &ai) == 0) ay_max = ai.maximum;
+    if (ax_max <= 0) ax_max = 20351;
+    if (ay_max <= 0) ay_max = 44351;
+    printf("touchdraw on %s absmax=%ldx%ld, %d s, touch the screen\n",
+           evname, ax_max, ay_max, secs);
 
     struct { int x, y, on; } slots[10];
     memset(slots, 0, sizeof slots);
@@ -335,7 +364,8 @@ int main(int argc, char **argv) {
             time_t now = time(NULL);
             if (now != t_mark) {
                 t_mark = now;
-                int cy = 200 + (now % 8) * 200, cx = 400 + (now % 8) * 300;
+                int cy = 200 + (now % 8) * ((int)cd.height - 400) / 8,
+                    cx = 200 + (now % 8) * ((int)cd.width - 400) / 8;
                 for (int dy = -40; dy <= 40; dy++)
                     for (int dx = -40; dx <= 40; dx++)
                         fb32[(size_t)(cy + dy) * pitch32 + cx + dx] = 0xFFFFFF00u;
@@ -374,8 +404,10 @@ int main(int argc, char **argv) {
         }
         for (int s = 0; s < 10; s++) {
             if (!slots[s].on) continue;
-            int cx0 = slots[s].y / 100;   /* event11 Y axis -> panel width  (correct) */
-            int cy0 = (int)cd.height - 1 - slots[s].x / 100;  /* X axis -> height, flipped */
+            /* piano (NVT): axes transposed + flipped, 0.01mm units /100.
+             * canoe: X->width Y->height, scaled by abs range (16x native). */
+            int cx0 = (int)((long)slots[s].x * cd.width / (ax_max + 1));
+            int cy0 = (int)((long)slots[s].y * cd.height / (ay_max + 1));
             for (int dy = -R; dy <= R; dy++) {
                 int py = cy0 + dy;
                 if (py < 0 || py >= (int)cd.height) continue;

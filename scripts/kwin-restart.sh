@@ -3,6 +3,8 @@
 # 以 root 运行。
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 DIR=$ROOT
+LINUX_USER=${LINUX_USER:-xieyizhou}
+LINUX_HOME=${LINUX_HOME:-/home/$LINUX_USER}
 LOGD=${LOG_DIR:-$(dirname "$ROOT")/logs}
 mkdir -p "$LOGD"
 pkill -9 -f "kwinwrap --out" 2>/dev/null
@@ -11,7 +13,7 @@ sleep 1
 env KWINWRAP_HIJACK=1 KWINWRAP_FILTER=1 KWINWRAP_SECCOMP=1 \
     KWINWRAP_UID=1000 KWINWRAP_GID=1000 \
     "$DIR/bin/kwinwrap" --out $LOGD/kwinatomic.log -- \
-    env -u DISPLAY -u WAYLAND_DISPLAY HOME=/home/xieyizhou \
+    env -u DISPLAY -u WAYLAND_DISPLAY HOME=$LINUX_HOME \
         KWIN_DRM_DEVICES=/dev/dri/card0 \
         FD_MESA_DEBUG=noubwc \
         KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 \

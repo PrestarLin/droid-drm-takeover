@@ -4,6 +4,8 @@
 # 任一关键步失败 → 自动回滚（恢复安卓全家，含 system_suspend 显式拉起，防 Scout 重启）。
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DIR=$ROOT
+LINUX_USER=${LINUX_USER:-xieyizhou}
+LINUX_HOME=${LINUX_HOME:-/home/$LINUX_USER}
 LOGD=${LOG_DIR:-$(dirname "$ROOT")/logs}
 mkdir -p "$LOGD"
 
@@ -81,17 +83,29 @@ else
         || echo "WIFI-GEN miss and no static conf: desktop will run WITHOUT network"
 fi
 
-# ---- 1) DRM 节点 + udev 合成记录（与 drm-takeover.sh 同源） ----
+# ---- 1) DRM 节点 + udev 合成记录（与 drm-takeover.sh 同源，动态发现） ----
 mkdir -p /dev/dri /dev/input
 [ -c /dev/dri/card0 ] || mknod /dev/dri/card0 c 226 0
 chmod 666 /dev/dri/card0 2>/dev/null
-[ -c /dev/input/event11 ] || mknod /dev/input/event11 c 13 75
-chmod 666 /dev/input/event11 2>/dev/null
-if [ ! -f /run/udev/data/c226:0 ] || ! grep -q DRIVER /run/udev/data/c226:0; then
+TD=$(run 'for e in /sys/class/input/event*; do nm=$(cat "$e/device/name" 2>/dev/null); case "$nm" in *ouch*|*NVT*|*Xiaomi*) echo "$(basename $e) $(cat $e/dev 2>/dev/null) $(basename $(dirname $e))"; break;; esac; done' | tr -d '\r')
+if [ -n "$TD" ]; then
+    EV=${TD%% *}; REST=${TD#* }; DEVNO=${REST%% *}; INP=${REST##* }
+else
+    EV=event11; DEVNO=13:75; INP=input11   # piano 兜底
+fi
+MAJ=${DEVNO%%:*}; MIN=${DEVNO##*:}
+echo "TOUCH-NODE $EV ($MAJ:$MIN) $INP"
+[ -c /dev/input/$EV ] || mknod /dev/input/$EV c "$MAJ" "$MIN"
+chmod 666 /dev/input/$EV 2>/dev/null
+CARD_DEVP=$(run 'readlink /sys/class/drm/card0' | tr -d '\r' | sed 's|^\.\./\.\./||')
+[ -n "$CARD_DEVP" ] || CARD_DEVP=devices/platform/soc/ae00000.qcom,mdss_mdp/drm/card0
+TOUCH_DEVP=$(run "readlink /sys/class/input/$EV" | tr -d '\r' | sed 's|^\.\./\.\./||')
+[ -n "$TOUCH_DEVP" ] || TOUCH_DEVP=devices/virtual/input/$INP
+if [ ! -f /run/udev/data/c226:0 ] || ! grep -qF "$CARD_DEVP" /run/udev/data/c226:0; then
     mkdir -p /run/udev/data
-    printf 'Q:100\nE:DEVPATH=/devices/platform/soc/ae00000.qcom,mdss_mdp/drm/card0\nE:MAJOR=226\nE:MINOR=0\nE:SUBSYSTEM=drm\nE:DEVTYPE=drm_minor\nE:DEVNAME=dri/card0\nE:DRIVER=vmwgfx\nH:uaccess\nH:seat\n' > /run/udev/data/c226:0
-    printf 'Q:101\nE:DEVPATH=/devices/platform/soc/ae00000.qcom,mdss_mdp/drm/renderD128\nE:MAJOR=226\nE:MINOR=128\nE:SUBSYSTEM=drm\nE:DEVTYPE=drm_minor\nE:DEVNAME=dri/renderD128\nE:DRIVER=vmwgfx\nH:uaccess\nH:seat\n' > /run/udev/data/c226:128
-    printf 'Q:100\nE:DEVPATH=/devices/virtual/input/input11\nE:MAJOR=13\nE:MINOR=75\nE:SUBSYSTEM=input\nE:DEVNAME=input/event11\nE:ID_INPUT=1\nE:ID_INPUT_TOUCH=1\nE:ID_INPUT_TOUCHSCREEN=1\nE:LIBINPUT_DEVICE_GROUP=11/6/15d9:NVTCapacitiveTouchScreen\nE:LIBINPUT_CALIBRATION_MATRIX=0 1 0 -1 0 1 0 0 1\nH:uaccess\nH:seat\n' > /run/udev/data/c13:75
+    printf 'Q:100\nE:DEVPATH=%s\nE:MAJOR=226\nE:MINOR=0\nE:SUBSYSTEM=drm\nE:DEVTYPE=drm_minor\nE:DEVNAME=dri/card0\nE:DRIVER=vmwgfx\nH:uaccess\nH:seat\n' "$CARD_DEVP" > /run/udev/data/c226:0
+    printf 'Q:101\nE:DEVPATH=%s\nE:MAJOR=226\nE:MINOR=128\nE:SUBSYSTEM=drm\nE:DEVTYPE=drm_minor\nE:DEVNAME=dri/renderD128\nE:DRIVER=vmwgfx\nH:uaccess\nH:seat\n' "${CARD_DEVP%/card0}/renderD128" > /run/udev/data/c226:128
+    printf 'Q:100\nE:DEVPATH=%s\nE:MAJOR=%s\nE:MINOR=%s\nE:SUBSYSTEM=input\nE:DEVNAME=input/%s\nE:ID_INPUT=1\nE:ID_INPUT_TOUCH=1\nE:ID_INPUT_TOUCHSCREEN=1\nH:uaccess\nH:seat\n' "$TOUCH_DEVP" "$MAJ" "$MIN" "$EV" > "/run/udev/data/c$MAJ:$MIN"
     chmod -R a+rX /run/udev
 fi
 
@@ -110,7 +124,7 @@ rm -f $DIR/takeover.ok
 env KWINWRAP_HIJACK=1 KWINWRAP_FILTER=1 KWINWRAP_SECCOMP=1 \
     KWINWRAP_UID=1000 KWINWRAP_GID=1000 KWINWRAP_BRIGHTNESS=2048 \
     $DIR/bin/kwinwrap --out $LOGD/kwinatomic.log -- \
-    env -u DISPLAY -u WAYLAND_DISPLAY HOME=/home/xieyizhou \
+    env -u DISPLAY -u WAYLAND_DISPLAY HOME=$LINUX_HOME \
         KWIN_DRM_DEVICES=/dev/dri/card0 \
         FD_MESA_DEBUG=noubwc \
         KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 \
@@ -122,8 +136,8 @@ env KWINWRAP_HIJACK=1 KWINWRAP_FILTER=1 KWINWRAP_SECCOMP=1 \
 KPID=$!
 sleep 6
 kill -0 $KPID 2>/dev/null || rollback "kwin died (see kwin.log)"
-runuser -u xieyizhou -- env -u DISPLAY WAYLAND_DISPLAY=taketest \
-    HOME=/home/xieyizhou XDG_RUNTIME_DIR=/run/user/1000 \
+runuser -u $LINUX_USER -- env -u DISPLAY WAYLAND_DISPLAY=taketest \
+    HOME=$LINUX_HOME XDG_RUNTIME_DIR=/run/user/1000 \
     QT_QPA_PLATFORM=wayland \
     timeout 5 wayland-info > $LOGD/wayland-info.log 2>&1
 [ $? = 0 ] || rollback "wayland-info self-check failed"
@@ -140,36 +154,36 @@ $DIR/bin/crtcstate > $LOGD/crtcstate-desk2.log 2>&1
 # 09-23 黑屏根因：plasmashell 硬依赖 kactivitymanagerd，总线自动激活今天直接超时
 # （"Aborting shell load: The activity manager daemon is not running" → 无壳黑屏）。
 # 不再赌 dbus 激活：显式拉起并等名字出现。
-nohup runuser -u xieyizhou -- env -u DISPLAY -u QT_IM_MODULE -u GTK_IM_MODULE -u XMODIFIERS \
+nohup runuser -u $LINUX_USER -- env -u DISPLAY -u QT_IM_MODULE -u GTK_IM_MODULE -u XMODIFIERS \
     QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=taketest \
-    HOME=/home/xieyizhou XDG_RUNTIME_DIR=/run/user/1000 \
+    HOME=$LINUX_HOME XDG_RUNTIME_DIR=/run/user/1000 \
     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
     /usr/lib/aarch64-linux-gnu/libexec/kactivitymanagerd > $LOGD/kactivitymanagerd.log 2>&1 &
 for i in $(seq 1 10); do
-    runuser -u xieyizhou -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    runuser -u $LINUX_USER -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
         gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
         --method org.freedesktop.DBus.ListNames 2>/dev/null | grep -q org.kde.ActivityManager && break
     sleep 1
 done
-runuser -u xieyizhou -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+runuser -u $LINUX_USER -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
     gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
     --method org.freedesktop.DBus.ListNames 2>/dev/null | grep -q org.kde.ActivityManager \
     || echo "WARN: kactivitymanagerd not on bus, plasmashell may abort (see kactivitymanagerd.log)"
 # /etc/environment 的 QT_IM_MODULE=fcitx5 会把 Qt 应用的 text-input 抢去 fcitx，
 # kwin 收不到聚焦事件 → plasma-keyboard 永远不弹（Chrome 自带协议所以能弹）。
 # 一律清掉，让 Qt 回退到 compositor 内置 text-input。
-nohup runuser -u xieyizhou -- env -u DISPLAY -u QT_IM_MODULE -u GTK_IM_MODULE \
+nohup runuser -u $LINUX_USER -- env -u DISPLAY -u QT_IM_MODULE -u GTK_IM_MODULE \
     -u SDL_IM_MODULE -u GLFW_IM_MODULE -u XMODIFIERS \
     WAYLAND_DISPLAY=taketest \
-    HOME=/home/xieyizhou XDG_RUNTIME_DIR=/run/user/1000 \
+    HOME=$LINUX_HOME XDG_RUNTIME_DIR=/run/user/1000 \
     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
     QT_QPA_PLATFORM=wayland \
     /usr/bin/plasmashell --replace > $LOGD/plasma.log 2>&1 &
 # 任务栏点击启动应用走 xdg-desktop-portal；不带 KDE 环境起来的话只有 gtk 后端
-nohup runuser -u xieyizhou -- env -u DISPLAY -u QT_IM_MODULE -u GTK_IM_MODULE \
+nohup runuser -u $LINUX_USER -- env -u DISPLAY -u QT_IM_MODULE -u GTK_IM_MODULE \
     -u SDL_IM_MODULE -u GLFW_IM_MODULE -u XMODIFIERS \
     WAYLAND_DISPLAY=taketest XDG_CURRENT_DESKTOP=KDE XDG_SESSION_TYPE=wayland \
-    HOME=/home/xieyizhou XDG_RUNTIME_DIR=/run/user/1000 \
+    HOME=$LINUX_HOME XDG_RUNTIME_DIR=/run/user/1000 \
     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
     QT_QPA_PLATFORM=wayland \
     /usr/libexec/xdg-desktop-portal > $LOGD/portal.log 2>&1 &

@@ -1,7 +1,10 @@
-/* touchinj — read the NVT kernel-direct touchscreen (event11) and inject
- * native touch into kwin via org_kde_kwin_fake_input (bypasses libinput,
- * which rejects our untagged mknod device).
- * usage: touchinj [seconds]   (WAYLAND_DISPLAY + event node from env/defaults)
+/* touchinj — read the kernel-direct touchscreen and inject native touch into
+ * kwin via org_kde_kwin_fake_input (bypasses libinput, which rejects our
+ * untagged mknod device). canoe adaptation: node auto-scanned by name
+ * (event7/"touchpanel" this boot; renumbers every boot), coordinates scaled
+ * from EVIOCGABS ranges (canoe 0..20351 x 0..44351 == 16x panel px, axes
+ * aligned — piano's NVT transpose/0.01mm /100 mapping removed).
+ * usage: touchinj [seconds] [node]   (WAYLAND_DISPLAY from env)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,14 +13,15 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/select.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <linux/input.h>
 #include <linux/input-event-codes.h>
 #include <wayland-client.h>
 #include "fake-input-protocol.h"
 
-#define PANEL_W 3200
-#define PANEL_H 2136
+#define PANEL_W 1272
+#define PANEL_H 2772
 #define NSLOT 10
 
 static struct wl_display *disp;
@@ -34,13 +38,14 @@ static const struct wl_registry_listener regl = { global, NULL };
 
 struct slot { int on, was, x, y; };
 static struct slot slots[NSLOT];
+static long ax_max = 20351, ay_max = 44351;
 
 static void flush_touches(void) {
     int any = 0;
     for (int s = 0; s < NSLOT; s++) {
         struct slot *t = &slots[s];
-        int cx = t->y / 100;                 /* event11 Y -> panel width  */
-        int cy = PANEL_H - 1 - t->x / 100;   /* event11 X -> height, flipped */
+        int cx = (int)((long)t->x * PANEL_W / (ax_max + 1));
+        int cy = (int)((long)t->y * PANEL_H / (ay_max + 1));
         if (cx < 0) cx = 0; if (cx >= PANEL_W) cx = PANEL_W - 1;
         if (cy < 0) cy = 0; if (cy >= PANEL_H) cy = PANEL_H - 1;
         if (t->on && !t->was) {
@@ -68,7 +73,6 @@ static void flush_touches(void) {
 int main(int argc, char **argv) {
     setvbuf(stderr, NULL, _IOLBF, 0);
     int secs = argc > 1 ? atoi(argv[1]) : 30;
-    const char *node = argc > 2 ? argv[2] : "/dev/input/event11";
     disp = wl_display_connect(NULL);
     if (!disp) { fprintf(stderr, "wayland connect failed: %s\n", strerror(errno)); return 1; }
     struct wl_registry *reg = wl_display_get_registry(disp);
@@ -77,9 +81,35 @@ int main(int argc, char **argv) {
     if (!fake) { fprintf(stderr, "no org_kde_kwin_fake_input global\n"); return 2; }
     org_kde_kwin_fake_input_authenticate(fake, "drm-takeover", "touch-forwarding");
     wl_display_roundtrip(disp);
+    const char *node = argc > 2 ? argv[2] : NULL;
+    char scanned[64] = "";
+    if (!node) {
+        for (int i = 0; i < 32; i++) {
+            char path[64];
+            snprintf(path, sizeof path, "/dev/input/event%d", i);
+            int f = open(path, O_RDONLY);
+            if (f < 0) continue;
+            char nm[64] = "";
+            if (ioctl(f, EVIOCGNAME(sizeof nm), nm) >= 0 &&
+                (strstr(nm, "touch") || strstr(nm, "NVT") || strstr(nm, "Xiaomi"))) {
+                snprintf(scanned, sizeof scanned, "%s", path);
+                close(f);
+                node = scanned;
+                break;
+            }
+            close(f);
+        }
+        if (!node) node = "/dev/input/event11";
+    }
     int ifd = open(node, O_RDONLY);
     if (ifd < 0) { fprintf(stderr, "open %s: %s\n", node, strerror(errno)); return 3; }
-    fprintf(stderr, "touchinj ready (%d s), touch the panel\n", secs);
+    struct input_absinfo ai;
+    if (ioctl(ifd, EVIOCGABS(ABS_MT_POSITION_X), &ai) == 0 && ai.maximum > 0)
+        ax_max = ai.maximum;
+    if (ioctl(ifd, EVIOCGABS(ABS_MT_POSITION_Y), &ai) == 0 && ai.maximum > 0)
+        ay_max = ai.maximum;
+    fprintf(stderr, "touchinj ready (%d s) on %s absmax=%ldx%ld, touch the panel\n",
+            secs, node, ax_max, ay_max);
     int cur = 0;
     time_t end = time(NULL) + secs;
     while (time(NULL) < end) {

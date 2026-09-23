@@ -532,6 +532,35 @@ static long relay_atomic(struct drm_mode_atomic *la) {
 #define SPLIT_CONN       67u
 #define SPLIT_W 1600u
 #define SPLIT_H 2136u
+/* Dual-pipe split is PIANO-ONLY (3200x2136 dual-DSI; single legacy pipe
+ * scans out garbled there). canoe/OnePlus 15 (1272x2772 single DSI) drives
+ * fine on one plane — drmatomic COMMIT proved it — so pass kwin's commits
+ * through raw. Gate: KWINWRAP_SPLIT=0/1 env, else auto by panel mode. */
+static int split_enabled(void) {
+    static int on = -1;
+    if (on >= 0) return on;
+    const char *e = getenv("KWINWRAP_SPLIT");
+    if (e) { on = atoi(e) != 0; }
+    else {
+        on = 0;
+        drmModeRes *r = drmModeGetResources(DRMFD >= 0 ? DRMFD : -1);
+        if (r) {
+            for (int i = 0; i < r->count_connectors && !on; i++) {
+                drmModeConnector *c = drmModeGetConnector(DRMFD, r->connectors[i]);
+                if (!c) continue;
+                if (c->connection == DRM_MODE_CONNECTED && c->count_modes)
+                    on = (c->modes[0].hdisplay == 3200 && c->modes[0].vdisplay == 2136);
+                drmModeFreeConnector(c);
+            }
+            drmModeFreeResources(r);
+        }
+    }
+    fprintf(LOG, "SPLIT: %s (panel %s dual-DSI piano mode)\n",
+            on ? "ENABLED" : "disabled — raw passthrough (canoe single-pipe)",
+            on ? "is" : "is not");
+    fflush(LOG);
+    return on;
+}
 static __u32 s_objs[64], s_cnts[64], s_props[2048], s_props2[2048];
 static __u64 s_vals[2048], s_vals2[2048];
 static __u32 pl_fb, pl_crtc, pl_sx, pl_sy, pl_sw, pl_sh, pl_cx, pl_cy, pl_cw, pl_ch;
@@ -543,6 +572,7 @@ static __u32 sc_no, sc_np;
 static int sc_dumped;
 
 static void split_commit(pid_t t, unsigned long long uptr, struct ptregs *r) {
+    if (!split_enabled()) return;   /* canoe: raw passthrough, no rewrite */
     struct drm_mode_atomic a;
     if (readmem(t, uptr, &a, sizeof a) != (ssize_t)sizeof a) return;
     __u32 nobj = a.count_objs;

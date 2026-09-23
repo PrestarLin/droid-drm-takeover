@@ -4,6 +4,12 @@
 3200x2136@120、触摸可用、不 ROOT 改内核、**不魔改一行 Mesa**。
 
 > ⚠️ 目前只在 **Xiaomi Pad 8 Pro（codename `piano`，Adreno 830 / msm_geni_serial，内核 6.6.118-android15）** 上完整验证过。
+> ✅ **OnePlus 15（codename `canoe`，PLK110，SM8850 / Adreno 840v2，内核 6.12.23-android16）** 已完成核心链路适配验证：
+> DRM 节点未隐藏（免 mknod）、composer 服务名同款、单 pipe atomic COMMIT 通过（1272x2772@120cmd，
+> 无需 piano 的双 pipe split——`kwinwrap` 现按面板模式自动门控 `KWINWRAP_SPLIT`）、`kwinwrap` 交接仪式通过、
+> 触摸裸链路通过（`touchpanel` 节点动态发现 + EVIOCGABS 量程映射，events=2425/55s）、亮度走 sysfs
+> `panel0-backlight`（0..4094，DRM brightness 属性 canoe 不存在）。udev/mknod/watchdog 相关脚本已全部
+> 改为运行时动态发现（对象 ID 每次 boot/重启都会漂移）。Plasma 桌面整链待 Droidspace 容器回归。
 > 其他设备需要按"设备适配"一节重新探测对象 ID 和串口/固件参数，风险自负（最坏情况：需要长按电源强重启）。
 
 ## 它解决什么问题
